@@ -66,8 +66,8 @@ export function toCsv(rows: Record<string, unknown>[]): string {
   return [cols.join(","), ...rows.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\n");
 }
 
-export function download(name: string, text: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+export function download(name: string, text: string, type = "text/csv") {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const a = document.createElement("a");
   a.href = url;
   a.download = name;

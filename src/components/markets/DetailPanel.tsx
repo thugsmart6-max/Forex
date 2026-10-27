@@ -5,7 +5,8 @@ import { useMemo, useState } from "react";
 import * as ind from "@/lib/indicators";
 import { BY_ID, fmtPrice } from "@/lib/instruments";
 import { useHistory } from "@/lib/hooks";
-import { STRATEGIES, type StrategyKey } from "@/lib/strategies";
+import { STRATEGY_LIST } from "@/lib/strategies";
+import { useCustomStrategies } from "@/lib/useCustom";
 import type { Quote } from "@/lib/types";
 import { CandleChart, type Overlay } from "../charts";
 import { Card, Change, Segmented, SignalBadge, Spinner, cx } from "../ui";
@@ -18,7 +19,7 @@ const INTERVALS = [
 ] as const;
 type Iv = (typeof INTERVALS)[number]["value"];
 
-const SINGLE: StrategyKey[] = ["trend", "breakout", "meanrev"];
+const SINGLE = STRATEGY_LIST.filter((s) => s.legs === "any");
 
 export function DetailPanel({ id, quote }: { id: string; quote?: Quote }) {
   const inst = BY_ID[id];
@@ -27,14 +28,14 @@ export function DetailPanel({ id, quote }: { id: string; quote?: Quote }) {
   const [showBb, setShowBb] = useState(false);
   const range = INTERVALS.find((i) => i.value === iv)!.range;
   const { data, error, loading } = useHistory(id, iv, range, iv === "1d" ? 300_000 : 30_000);
+  const { defs: customDefs } = useCustomStrategies();
 
   const analysis = useMemo(() => {
     if (!data || data.c.length < 30) return null;
     const last = data.c.length - 1;
-    const signals = SINGLE.map((k) => {
-      const def = STRATEGIES[k];
+    const signals = [...SINGLE, ...customDefs].map((def) => {
       const sig = def.generate({ [id]: data }, [id], def.defaults)[id];
-      return { key: k, name: def.name, dir: sig[last], enough: data.c.length >= def.warmup(def.defaults) };
+      return { key: def.key, name: def.name, custom: def.group === "custom", dir: sig[last], enough: data.c.length >= def.warmup(def.defaults) };
     });
     const e20 = ind.ema(data.c, 20);
     const e50 = ind.ema(data.c, 50);
@@ -46,7 +47,7 @@ export function DetailPanel({ id, quote }: { id: string; quote?: Quote }) {
       atr: ind.atr(data, 14)[last],
       e20, e50, bb,
     };
-  }, [data, id]);
+  }, [data, id, customDefs]);
 
   const overlays = useMemo<Overlay[]>(() => {
     if (!analysis) return [];
@@ -112,6 +113,7 @@ export function DetailPanel({ id, quote }: { id: string; quote?: Quote }) {
                 <li key={s.key} className="flex items-center justify-between gap-2 text-sm">
                   <span className="text-ink-2">
                     {s.name}
+                    {s.custom && <span className="ml-1 rounded bg-accent/15 px-1 text-[10px] font-semibold text-accent">MINE</span>}
                     {!s.enough && <span className="ml-1 text-xs text-warn" title="Fewer bars than the strategy's warm-up period">(short history)</span>}
                   </span>
                   <SignalBadge dir={s.dir} />

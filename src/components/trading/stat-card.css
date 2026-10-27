@@ -1,0 +1,284 @@
+/* From Uiverse.io by code-town3 */
+.stat-card {
+  background: #232733;
+  border-radius: 18px;
+  box-shadow: 0 4px 24px 0 rgba(0, 0, 0, 0.18);
+  padding: 2rem 1.5rem 1.5rem 1.5rem;
+  width: 340px;
+  color: #f3f6fa;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.stat-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.stat-card-title {
+  font-family: "Inter", sans-serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #f3f6fa;
+  letter-spacing: 0.01em;
+  margin: 0;
+  line-height: 1.2;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: linear-gradient(90deg, #fff 0%, #f3f6fa 50%, #e3e8ef 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.stat-card-chart {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.donut {
+  width: 170px;
+  height: 170px;
+}
+
+.donut-bg {
+  fill: none;
+  stroke: #232733;
+  stroke-width: 14;
+}
+
+.donut-segment.sales {
+  stroke: #3d8bff;
+}
+
+.donut-segment.product {
+  stroke: #ff6a3d;
+}
+
+.donut-segment.income {
+  stroke: #1ecb6b;
+}
+
+.donut-segment {
+  fill: none;
+  stroke-width: 14;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.3s;
+}
+
+.donut-text-main {
+  font-size: 2.1rem;
+  font-weight: 600;
+  fill: #f3f6fa;
+}
+
+.donut-text-sub {
+  font-size: 1rem;
+  fill: #b0b6c3;
+}
+
+.stat-card-legend {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 1rem;
+  color: #b0b6c3;
+}
+
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 0.5rem;
+}
+
+.legend-dot.sales {
+  background: #3d8bff;
+}
+
+.legend-dot.product {
+  background: #ff6a3d;
+}
+
+.legend-dot.income {
+  background: #1ecb6b;
+}
+
+.legend-value {
+  font-size: 2rem;
+  color: #3d8bff;
+  font-weight: 600;
+  margin-left: 0.5rem;
+}
+
+.legend-change {
+  color: #1ecb6b;
+  font-weight: 600;
+  margin-left: 10px;
+}
+
+.linechart {
+  width: 100%;
+  max-width: 360px;
+  height: 120px;
+  display: block;
+}
+
+.linechart .x-labels text {
+  font-family: "Inter", sans-serif;
+  font-size: 12px;
+  fill: #b0b6c3;
+}
+
+.dot-group .tooltip {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+
+.dot-group:hover .tooltip {
+  opacity: 1;
+}
+
+.dot-group .tooltip rect {
+  fill: #232733;
+  stroke: #232733;
+  stroke-width: 1.2;
+  filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.22));
+  rx: 8;
+  opacity: 0.92;
+}
+
+.dot-group .tooltip text {
+  font-family: "Inter", sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  fill: #fff;
+  letter-spacing: 0.2px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.menu-wrapper {
+  position: relative;
+  display: inline-block;
+  margin-right: 4px;
+}
+
+.menu-dots {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  cursor: pointer;
+  width: 18px;
+  align-items: center;
+  margin: 0 8px;
+}
+
+.menu-dots span {
+  display: block;
+  width: 5px;
+  height: 5px;
+  background: #6c7383;
+  border-radius: 50%;
+  transition: background 0.2s;
+}
+
+.menu-toggle {
+  display: none;
+}
+
+.menu-select {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: 30px;
+  min-width: 110px;
+  z-index: 10;
+  padding: 8px 0;
+  border-radius: 18px;
+  border: 1.5px solid rgba(80, 90, 120, 0.18);
+  background: rgba(30, 34, 44, 0.72);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition:
+    opacity 0.25s cubic-bezier(0.4, 2, 0.6, 1),
+    transform 0.25s cubic-bezier(0.4, 2, 0.6, 1);
+  opacity: 0;
+  transform: scale(0.95) translateY(-8px);
+  pointer-events: none;
+}
+
+.menu-toggle:checked + .menu-dots + .menu-select {
+  display: block;
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  pointer-events: auto;
+}
+
+.menu-select div {
+  padding: 10px 20px 10px 16px;
+  color: #f3f6fa;
+  cursor: pointer;
+  font-size: 15px;
+  font-family: "Inter", sans-serif;
+  border-left: 3px solid transparent;
+  margin-bottom: 2px;
+  border-radius: 8px;
+  transition:
+    background 0.18s,
+    color 0.18s,
+    border-left 0.18s;
+}
+
+.menu-select div:nth-child(1) {
+  border-left: 3px solid #3d8bff;
+}
+.menu-select div:nth-child(2) {
+  border-left: 3px solid #ff6a3d;
+}
+.menu-select div:nth-child(3) {
+  border-left: 3px solid #1ecb6b;
+}
+
+.menu-select div:hover {
+  background: rgba(61, 139, 255, 0.08);
+  color: #3d8bff;
+  border-left: 3px solid #3d8bff;
+}
+.menu-select div:nth-child(2):hover {
+  background: rgba(255, 106, 61, 0.08);
+  color: #ff6a3d;
+  border-left: 3px solid #ff6a3d;
+}
+.menu-select div:nth-child(3):hover {
+  background: rgba(30, 203, 107, 0.08);
+  color: #1ecb6b;
+  border-left: 3px solid #1ecb6b;
+}
+
+.stat-card-legend .legend-item:first-child {
+  font-size: 0.95rem;
+  color: #b8c0cc;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+/* app additions: keep the card inside narrow phones */
+.stat-card {
+  max-width: 100%;
+  flex-shrink: 0;
+}
+.menu-select div {
+  white-space: nowrap;
+}

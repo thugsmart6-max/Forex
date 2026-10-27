@@ -7,12 +7,15 @@
  */
 import { atr } from "./indicators";
 import { Engine, type Bar, type EngineConfig, type EngineState } from "./engine";
-import { STRATEGIES, type Params, type StrategyKey } from "./strategies";
+import { compileCustom, type CustomStrategy } from "./custom";
+import { getStrategy, type Params, type StrategyDef, type StrategyKey } from "./strategies";
 import { align, emptyOHLC, sliceOHLC, type DataSet } from "./types";
 
 export interface PaperSetup {
   strategy: StrategyKey;
   params: Params;
+  /** copy of the rules for Strategy Builder strategies, so a saved session survives edits/deletes */
+  custom?: CustomStrategy;
   keys: string[];
   cfg: EngineConfig;
   feed: "replay" | "live";
@@ -30,7 +33,11 @@ export interface PaperSnapshot {
   startedAt: number;
 }
 
-const MAX_CURVE = 5000;
+const MAX_CURVE = 20000;
+
+export function strategyFor(setup: PaperSetup): StrategyDef {
+  return setup.custom ? compileCustom(setup.custom) : getStrategy(setup.strategy);
+}
 
 export class PaperTrader {
   setup: PaperSetup;
@@ -40,15 +47,17 @@ export class PaperTrader {
   lastTs: number | null = null;
   lastSignals: Record<string, number> = {};
   startedAt: number;
+  def: StrategyDef;
 
   constructor(setup: PaperSetup, history: DataSet, lookback = 600) {
     this.setup = setup;
-    const def = STRATEGIES[setup.strategy];
+    const def = strategyFor(setup);
     this.lookback = Math.max(lookback, def.warmup(setup.params) + 50);
     const a = align(history);
     this.hist = Object.fromEntries(setup.keys.map((k) => [k, sliceOHLC(a[k], Math.max(0, a[k].t.length - this.lookback))]));
     this.lastTs = this.hist[setup.keys[0]].t.at(-1) ?? null;
-    this.engine = new Engine(setup.keys, setup.cfg, def.sizing);
+    this.def = def;
+    this.engine = new Engine(setup.keys, setup.cfg, def.sizing, def.exits?.(setup.params));
     this.engine.maxLog = 500;
     this.startedAt = Date.now();
   }
@@ -68,7 +77,7 @@ export class PaperTrader {
   }
 
   onBar(t: number, bars: Record<string, Bar>) {
-    const { keys, strategy, params } = this.setup;
+    const { keys, params } = this.setup;
     for (const k of keys) {
       const h = this.hist[k] ?? emptyOHLC();
       const b = bars[k];
@@ -80,7 +89,7 @@ export class PaperTrader {
       this.hist[k] = h.t.length > this.lookback ? sliceOHLC(h, h.t.length - this.lookback) : h;
     }
     const win = align(this.hist);
-    const sig = STRATEGIES[strategy].generate(win, keys, params);
+    const sig = this.def.generate(win, keys, params);
     const signals = Object.fromEntries(keys.map((k) => [k, sig[k].at(-1) ?? 0]));
     const atrs = Object.fromEntries(keys.map((k) => {
       const v = atr(win[k]).at(-1);

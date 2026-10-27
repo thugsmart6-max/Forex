@@ -12,6 +12,7 @@ const NAV = [
   { href: "/", label: "Markets", icon: "M3 17l5-6 4 4 8-10M14 5h6v6" },
   { href: "/backtest", label: "Backtest", icon: "M4 19V5M4 19h16M8 15l3-4 3 2 5-6" },
   { href: "/paper", label: "Paper Trade", icon: "M12 3v18M5 8h9.5a3.5 3.5 0 010 7H6" },
+  { href: "/builder", label: "Builder", icon: "M4 6h10M4 12h6M4 18h10M17 4v4M15 6h4M13 12h7M16 16v4M14 18h4" },
   { href: "/guide", label: "Guide", icon: "M5 4h10a4 4 0 014 4v12H9a4 4 0 01-4-4V4zM9 8h6M9 12h6" },
 ];
 
@@ -107,7 +108,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main className="flex-1 px-4 pt-5 pb-24 md:px-6 md:pb-10">{children}</main>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-line bg-surface md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-line bg-surface md:hidden">
         {NAV.map((n) => (
           <Link key={n.href} href={n.href} className={cx("flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium", active(n.href) ? "text-accent" : "text-ink-3")}>
             <Icon d={n.icon} />

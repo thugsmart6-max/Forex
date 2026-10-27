@@ -6,8 +6,11 @@ import { DEFAULT_CONFIG, type EngineConfig } from "@/lib/engine";
 import { dateTime, pct, usd } from "@/lib/format";
 import { fetchHistory, useLocalStorage, useThrottle } from "@/lib/hooks";
 import { BY_ID, fmtPrice } from "@/lib/instruments";
-import { PaperTrader, LIVE_RANGE, STEP_SEC, type PaperSetup, type PaperSnapshot } from "@/lib/paper";
-import { STRATEGIES, STRATEGY_LIST, type Params, type StrategyKey } from "@/lib/strategies";
+import { PaperTrader, LIVE_RANGE, STEP_SEC, strategyFor, type PaperSetup, type PaperSnapshot } from "@/lib/paper";
+import { STRATEGY_LIST, findStrategy, getStrategy, withDefaults, type Params, type StrategyKey } from "@/lib/strategies";
+import { useCustomStrategies } from "@/lib/useCustom";
+import { monthlyStats } from "@/lib/backtest";
+import { ReturnsCalendar } from "./MonthlyStats";
 import { synthetic } from "@/lib/synthetic";
 import { align, sliceOHLC, type DataSet } from "@/lib/types";
 import { CandleChart, LineChart, type Marker } from "../charts";
@@ -50,7 +53,8 @@ async function fetchSet(setup: PaperSetup, range: string): Promise<DataSet> {
 
 export function PaperView() {
   // ----- setup form -----
-  const [strategy, setStrategy] = useLocalStorage<StrategyKey | "all">("pp.strategy", "breakout");
+  const { list: customList, defs: customDefs } = useCustomStrategies();
+  const [strategy, setStrategy] = useLocalStorage<StrategyKey | "all" | "allhw">("pp.strategy", "breakout");
   const [symbols, setSymbols] = useLocalStorage<string[]>("pp.symbols", ["XAUUSD"]);
   const [legs, setLegs] = useLocalStorage<[string, string]>("pp.legs", ["XAUUSD", "XAGUSD"]);
   const [feed, setFeed] = useLocalStorage<"replay" | "live">("pp.feed", "replay");
@@ -74,7 +78,8 @@ export function PaperView() {
   const [chartSym, setChartSym] = useState<string | null>(null);
   const [tab, setTab] = useState<"trades" | "log">("log");
 
-  const strat: StrategyKey = strategy === "all" ? "trend" : strategy;
+  const strat: StrategyKey = strategy === "all" || strategy === "allhw" || !findStrategy(strategy) ? "trend" : strategy;
+  const stratDef = getStrategy(strat);
   const t = trader;
 
   const persist = useCallback((tr: PaperTrader | null) => {
@@ -104,7 +109,8 @@ export function PaperView() {
     if (!keys.length) return setError("Pick at least one instrument.");
     if (strat === "ratio" && legs[0] === legs[1]) return setError("The pair strategy needs two different instruments.");
     const setup: PaperSetup = {
-      strategy: strat, params: params[strat] ?? STRATEGIES[strat].defaults, keys, cfg, feed,
+      strategy: strat, params: withDefaults(strat, params[strat]), keys, cfg, feed,
+      custom: stratDef.group === "custom" ? customList.find((c) => `custom:${c.id}` === strat) : undefined,
       source: feed === "live" ? "yahoo" : source,
       interval: feed === "replay" && source === "synthetic" && interval !== "1d" ? "1h" : interval,
       range: feed === "live" ? LIVE_RANGE[interval] : interval === "1h" ? "730d" : interval === "1d" ? "10y" : "60d",
@@ -113,7 +119,7 @@ export function PaperView() {
     try {
       const data = await fetchSet(setup, setup.range);
       const n = data[keys[0]].t.length;
-      const def = STRATEGIES[setup.strategy];
+      const def = strategyFor(setup);
       const warm = Math.max(600, def.warmup(setup.params) + 50);
       let tr: PaperTrader;
       if (setup.feed === "replay") {
@@ -256,6 +262,10 @@ export function PaperView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartTick, sym, t]);
 
+  const paperMonths = useMemo(() => (eng && eng.equityCurve.length ? monthlyStats(eng.equityCurve, eng.trades, initial) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chartTick, t]);
+
   const tradesCopy = useMemo(() => (eng ? [...eng.trades] : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tradeCount, t]);
@@ -276,7 +286,7 @@ export function PaperView() {
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="space-y-4">
             <Card title="1 · Strategy">
-              <StrategyPicker value={strat} onChange={setStrategy} />
+              <StrategyPicker value={strat} onChange={setStrategy} custom={customDefs} />
             </Card>
             <Card title="2 · Instruments">
               {strat === "ratio" ? (
@@ -330,7 +340,8 @@ export function PaperView() {
             <Card title="4 · Parameters & risk" actions={<button onClick={() => setShowAdvanced(!showAdvanced)} className="text-xs font-medium text-accent hover:underline">{showAdvanced ? "Hide" : "Customise"}</button>}>
               {showAdvanced ? (
                 <div className="space-y-5">
-                  <ParamsEditor def={STRATEGIES[strat]} params={params[strat] ?? STRATEGIES[strat].defaults} onChange={(p) => setParams({ ...params, [strat]: p })} />
+                  <ParamsEditor def={stratDef} params={withDefaults(strat, params[strat])} onChange={(p) => setParams({ ...params, [strat]: p })} />
+                  {stratDef.exits && <p className="text-[11px] text-ink-3">{stratDef.name} uses its own take-profit, stop and time limit (above) instead of the stop distance and trailing settings below.</p>}
                   <RiskEditor cfg={cfg} onChange={setCfg} showPair={strat === "ratio"} />
                 </div>
               ) : (
@@ -351,7 +362,7 @@ export function PaperView() {
               {isLive ? "● LIVE" : "⟲ REPLAY"}
             </span>
             <div className="min-w-0 text-sm">
-              <span className="font-semibold">{STRATEGIES[t.setup.strategy].name}</span>
+              <span className="font-semibold">{t.def.name}</span>
               <span className="text-ink-3"> · {keys.map((k) => BY_ID[k].name).join(" + ")} · {t.setup.interval} bars</span>
             </div>
             <span className="num text-xs text-ink-3">
@@ -459,6 +470,8 @@ export function PaperView() {
               </Card>
             </div>
           </div>
+
+          {paperMonths.length > 0 && <ReturnsCalendar months={paperMonths} fileName="paper_returns" />}
 
           <Card
             title={<Segmented size="sm" value={tab} onChange={setTab} options={[{ value: "log", label: "Event log" }, { value: "trades", label: `Trades (${eng!.trades.length})` }]} />}

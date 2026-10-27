@@ -1,18 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { drawdownCurve, runBacktest, type BacktestResult } from "@/lib/backtest";
+import { drawdownCurve, monthlyStats, runBacktest, type BacktestResult } from "@/lib/backtest";
 import { download, parseCsv, toCsv } from "@/lib/csv";
 import { DEFAULT_CONFIG, type EngineConfig } from "@/lib/engine";
 import { date, dateTime, num, pct, usd } from "@/lib/format";
 import { BY_ID } from "@/lib/instruments";
 import { useLocalStorage } from "@/lib/hooks";
 import { loadData, type Source } from "@/lib/loadData";
-import { STRATEGIES, STRATEGY_LIST, type Params, type StrategyKey } from "@/lib/strategies";
+import { STRATEGY_LIST, findStrategy, getStrategy, withDefaults, type Params, type StrategyKey } from "@/lib/strategies";
+import { useCustomStrategies } from "@/lib/useCustom";
+import { pickKeys, type StrategyPick } from "./shared";
 import type { OHLC } from "@/lib/types";
 import { CandleChart, LineChart, type Marker } from "../charts";
 import { Button, Card, Empty, Field, Segmented, Spinner, cx, inputCls } from "../ui";
-import { InstrumentChips, InstrumentSelect, KpiGrid, ParamsEditor, RiskEditor, StrategyPicker, TradesTable, readSymbolParam } from "./shared";
+import { MonthlyStatCard, MonthlyTable, ReturnsCalendar } from "./MonthlyStats";
+import { InstrumentChips, InstrumentSelect, KpiGrid, ParamsEditor, RiskEditor, StrategyPicker, TradesTable, readParam, readSymbolParam } from "./shared";
 
 const RANGES: Record<"1h" | "1d", { value: string; label: string }[]> = {
   "1h": [
@@ -28,12 +31,15 @@ const RANGES: Record<"1h" | "1d", { value: string; label: string }[]> = {
   ],
 };
 
-const SERIES_VARS = ["--series-1", "--series-2", "--series-3", "--series-4"];
+const SERIES_VARS = ["--series-1", "--series-2", "--series-3", "--series-4", "--series-5"];
 
 const defaultParams = () => Object.fromEntries(STRATEGY_LIST.map((s) => [s.key, { ...s.defaults }])) as Record<StrategyKey, Params>;
 
 export function BacktestView() {
-  const [strategy, setStrategy] = useLocalStorage<StrategyKey | "all">("bt.strategy", "trend");
+  const { defs: customDefs } = useCustomStrategies();
+  const [savedPick, setStrategy] = useLocalStorage<StrategyPick>("bt.strategy", "trend");
+  // a deleted custom strategy (or one not loaded yet) falls back to Trend-following
+  const strategy: StrategyPick = savedPick === "all" || savedPick === "allhw" || findStrategy(savedPick) ? savedPick : "trend";
   const [symbols, setSymbols] = useLocalStorage<string[]>("bt.symbols", ["XAUUSD", "XAGUSD"]);
   const [legs, setLegs] = useLocalStorage<[string, string]>("bt.legs", ["XAUUSD", "XAGUSD"]);
   const [source, setSource] = useLocalStorage<Source>("bt.source", "yahoo");
@@ -49,12 +55,14 @@ export function BacktestView() {
   const [error, setError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // preset from the Markets page: /backtest?symbol=EURUSD
+  // presets: /backtest?symbol=EURUSD (Markets page) or ?strategy=custom:abc (Strategy Builder)
   useEffect(() => {
     const s = readSymbolParam();
+    const st = readParam("strategy");
+    if (st) setStrategy(st as StrategyPick);
     if (s) {
       setSymbols([s]);
-      if (strategy === "ratio") setStrategy("trend");
+      if (!st && strategy === "ratio") setStrategy("trend");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -75,8 +83,8 @@ export function BacktestView() {
     try {
       const data = await loadData(source, allKeys, interval, validRange, csvs);
       await new Promise((r) => setTimeout(r, 20)); // let the spinner paint
-      const keys: StrategyKey[] = strategy === "all" ? STRATEGY_LIST.map((s) => s.key) : [strategy];
-      const out = keys.map((k) => runBacktest(k, params[k] ?? STRATEGIES[k].defaults, data, k === "ratio" ? legs : symbols, cfg));
+      const keys = pickKeys(strategy);
+      const out = keys.map((k) => runBacktest(getStrategy(k), withDefaults(k, params[k]), data, k === "ratio" ? legs : symbols, cfg));
       setResults(out);
       setActive(0);
       setTimeout(() => document.getElementById("results")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
@@ -99,9 +107,10 @@ export function BacktestView() {
     }
   };
 
-  const editKey: StrategyKey = strategy === "all" ? "trend" : strategy;
-  const [paramTab, setParamTab] = useState<StrategyKey>(editKey);
-  const paramKey = strategy === "all" ? paramTab : strategy;
+  const comparing = strategy === "all" || strategy === "allhw";
+  const groupKeys = pickKeys(strategy);
+  const [paramTab, setParamTab] = useState<StrategyKey>(groupKeys[0]);
+  const paramKey = comparing ? (groupKeys.includes(paramTab) ? paramTab : groupKeys[0]) : (strategy as StrategyKey);
   const res = results[active];
 
   return (
@@ -117,7 +126,7 @@ export function BacktestView() {
         {/* ---------- settings ---------- */}
         <div className="space-y-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-1">
           <Card title="1 · Strategy">
-            <StrategyPicker value={strategy} onChange={setStrategy} allowAll />
+            <StrategyPicker value={strategy} onChange={setStrategy} allowAll custom={customDefs} />
           </Card>
 
           <Card title="2 · Instruments">
@@ -204,15 +213,18 @@ export function BacktestView() {
                   <div className="mb-2 flex items-center justify-between">
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-3">Strategy parameters</h3>
                   </div>
-                  {strategy === "all" && (
+                  {comparing && (
                     <div className="mb-3">
-                      <Segmented size="sm" value={paramTab} onChange={setParamTab} options={STRATEGY_LIST.map((s) => ({ value: s.key, label: s.name.split(" ")[0] }))} />
+                      <Segmented size="sm" value={paramKey} onChange={setParamTab} options={groupKeys.map((k) => ({ value: k, label: getStrategy(k).name.split(" ")[0] }))} />
                     </div>
                   )}
-                  <ParamsEditor def={STRATEGIES[paramKey]} params={params[paramKey] ?? STRATEGIES[paramKey].defaults} onChange={(p) => setParams({ ...params, [paramKey]: p })} />
+                  <ParamsEditor def={getStrategy(paramKey)} params={withDefaults(paramKey, params[paramKey])} onChange={(p) => setParams({ ...params, [paramKey]: p })} />
                 </div>
                 <div>
                   <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-3">Risk engine</h3>
+                  {getStrategy(paramKey).exits && (
+                    <p className="mb-2 text-[11px] text-ink-3">{getStrategy(paramKey).name} uses its own take-profit, stop and time limit (above) instead of the stop distance and trailing settings here.</p>
+                  )}
                   <RiskEditor cfg={cfg} onChange={setCfg} showPair={needsPair} />
                   <button onClick={() => setCfg(DEFAULT_CONFIG)} className="mt-2 text-xs text-accent hover:underline">Reset risk settings</button>
                 </div>
@@ -235,7 +247,7 @@ export function BacktestView() {
               <Empty>
                 <p className="mb-1 font-medium text-ink-2">No backtest yet</p>
                 Choose a strategy, instruments and data on the left, then press <b>Run backtest</b>.
-                <br />Tip: &ldquo;Compare all 4&rdquo; ranks every strategy on the same data.
+                <br />Tip: &ldquo;Compare high-win 5&rdquo; or &ldquo;Compare classic 4&rdquo; ranks a whole group on the same data.
               </Empty>
             </Card>
           ) : (
@@ -307,6 +319,7 @@ function ResultDetail({ res, initial }: { res: BacktestResult; initial: number }
   const [sym, setSym] = useState(res.keys[0]);
   const [tab, setTab] = useState<"trades" | "log">("trades");
   const dd = useMemo(() => drawdownCurve(res.equity), [res]);
+  const months = useMemo(() => monthlyStats(res.equity, res.trades, initial), [res, initial]);
   const markers = useMemo<Marker[]>(
     () => res.trades.filter((t) => t.symbol === sym).flatMap((t) => {
       const dir = t.side === "LONG" ? 1 : -1;
@@ -339,6 +352,13 @@ function ResultDetail({ res, initial }: { res: BacktestResult; initial: number }
           <span>Max losing streak <b className="num text-ink-2">{s.maxConsecLosses}</b></span>
         </div>
       </Card>
+
+      <div className="flex flex-wrap items-start gap-5">
+        <MonthlyStatCard months={months} initial={initial} finalEquity={s.finalEquity} start={s.start} end={s.end} />
+        <MonthlyTable months={months} />
+      </div>
+
+      <ReturnsCalendar months={months} fileName={`returns_${res.strategy.replace(":", "_")}`} />
 
       <div className="grid gap-5 2xl:grid-cols-2">
         <Card title="Equity curve" subtitle="Account value after every bar (USD)">

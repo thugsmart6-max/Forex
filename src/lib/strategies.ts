@@ -6,9 +6,16 @@
  * The signal on bar t is acted on at the OPEN of bar t+1 by the engine (no look-ahead).
  */
 import * as ind from "./indicators";
+import type { ExitRules } from "./engine";
+import { HIGH_WIN } from "./highwin";
 import type { DataSet, OHLC } from "./types";
 
-export type StrategyKey = "trend" | "breakout" | "meanrev" | "ratio";
+export type ClassicKey = "trend" | "breakout" | "meanrev" | "ratio";
+export type HighWinKey = "rubber" | "pullback" | "stoch" | "zfade" | "bounce";
+export type BuiltinKey = ClassicKey | HighWinKey;
+/** user-made strategies from the Strategy Builder */
+export type CustomKey = `custom:${string}`;
+export type StrategyKey = BuiltinKey | CustomKey;
 export type Params = Record<string, number | boolean>;
 export type Signals = Record<string, number[]>;
 
@@ -24,6 +31,8 @@ export interface ParamDef {
 
 export interface StrategyDef {
   key: StrategyKey;
+  /** classic = the README's four; highwin = small target / wide stop designs; custom = Strategy Builder */
+  group: "classic" | "highwin" | "custom";
   name: string;
   short: string;
   entry: string;
@@ -35,6 +44,8 @@ export interface StrategyDef {
   params: ParamDef[];
   warmup: (p: Params) => number;
   generate: (data: DataSet, keys: string[], p: Params) => Signals;
+  /** per-strategy exits (target / fixed stop / time); classic strategies use the risk settings */
+  exits?: (p: Params) => ExitRules;
 }
 
 const num = (p: Params, k: string) => Number(p[k]);
@@ -53,7 +64,8 @@ function trend(data: DataSet, keys: string[], p: Params): Signals {
       if (Number.isNaN(a[i])) pos = 0;
       // enter / flip only with trend strength, otherwise stand aside
       else if (raw !== pos) pos = a[i] > num(p, "adx_th") ? raw : 0;
-      sig.push(pos);
+      // reversed mode: sell where the crossover says buy, and buy where it says sell
+      sig.push(p.invert && pos !== 0 ? -pos : pos);
     }
     out[k] = sig;
   }
@@ -166,17 +178,19 @@ function ratio(data: DataSet, keys: string[], p: Params): Signals {
   return { [ka]: state.map((v) => (v === 0 ? 0 : -v)), [kb]: state };
 }
 
-export const STRATEGIES: Record<StrategyKey, StrategyDef> = {
+export const STRATEGIES: Record<BuiltinKey, StrategyDef> = {
   trend: {
     key: "trend",
+    group: "classic",
     name: "Trend-following",
     short: "Ride established trends with an EMA crossover, confirmed by ADX.",
-    entry: "EMA 20/50 cross, only if ADX(14) > 20",
+    entry: "EMA 20/50 cross, only if ADX(14) > 20. Reversed by default: fast EMA crossing above → SELL, crossing below → BUY",
     exit: "Opposite cross, ATR trailing stop",
     sizing: "atr",
     legs: "any",
-    defaults: { fast: 20, slow: 50, adx_n: 14, adx_th: 20 },
+    defaults: { fast: 20, slow: 50, adx_n: 14, adx_th: 20, invert: true },
     params: [
+      { key: "invert", label: "Reverse signals (buy ↔ sell)", help: "Sell where the original rule buys and buy where it sells. Untick for the original strategy", type: "bool" },
       { key: "fast", label: "Fast EMA", help: "Bars in the fast moving average", type: "int", min: 2, max: 200 },
       { key: "slow", label: "Slow EMA", help: "Bars in the slow moving average", type: "int", min: 5, max: 400 },
       { key: "adx_n", label: "ADX period", help: "Bars used to measure trend strength", type: "int", min: 2, max: 100 },
@@ -187,6 +201,7 @@ export const STRATEGIES: Record<StrategyKey, StrategyDef> = {
   },
   breakout: {
     key: "breakout",
+    group: "classic",
     name: "Breakout",
     short: "Turtle-style channel breakout, entered only during London/NY hours.",
     entry: "Close beyond 55-bar high/low, during 07–17 UTC (London/NY)",
@@ -206,6 +221,7 @@ export const STRATEGIES: Record<StrategyKey, StrategyDef> = {
   },
   meanrev: {
     key: "meanrev",
+    group: "classic",
     name: "Mean reversion",
     short: "Fade Bollinger Band extremes confirmed by RSI, only in ranging markets.",
     entry: "Close outside Bollinger(20,2) + RSI <30 / >70, only if ADX < 25",
@@ -227,6 +243,7 @@ export const STRATEGIES: Record<StrategyKey, StrategyDef> = {
   },
   ratio: {
     key: "ratio",
+    group: "classic",
     name: "Pair ratio (Gold–Silver)",
     short: "Statistical pair trade on the ratio of two instruments — Gold/Silver by default.",
     entry: "z-score of log(A/B) over 200 bars beyond ±2: short the rich leg, long the cheap one",
@@ -243,12 +260,43 @@ export const STRATEGIES: Record<StrategyKey, StrategyDef> = {
     warmup: (p) => num(p, "lookback") * 2,
     generate: ratio,
   },
+  ...HIGH_WIN,
 };
 
 export const STRATEGY_LIST = Object.values(STRATEGIES);
+export const CLASSIC = STRATEGY_LIST.filter((s) => s.group === "classic");
+export const HIGH_WIN_LIST = STRATEGY_LIST.filter((s) => s.group === "highwin");
 
 export function describe(def: StrategyDef, p: Params): string {
   return `${def.name} (${Object.entries(p)
     .map(([k, v]) => `${k}=${v}`)
     .join(", ")})`;
+}
+
+// ---------- custom strategies registry (filled on the client from saved Strategy Builder rules) ----------
+const custom = new Map<string, StrategyDef>();
+
+export function setCustomStrategies(defs: StrategyDef[]) {
+  custom.clear();
+  for (const d of defs) custom.set(d.key, d);
+}
+
+export function customStrategies(): StrategyDef[] {
+  return [...custom.values()];
+}
+
+/** Built-in or custom strategy, or undefined if it doesn't exist (e.g. a deleted custom one). */
+export function findStrategy(key: string): StrategyDef | undefined {
+  return (STRATEGIES as Record<string, StrategyDef>)[key] ?? custom.get(key);
+}
+
+export function getStrategy(key: StrategyKey): StrategyDef {
+  const d = findStrategy(key);
+  if (!d) throw new Error(`Strategy "${key}" not found - it may have been deleted in the Strategy Builder`);
+  return d;
+}
+
+/** Saved parameters merged over the defaults, so options added later get their default value. */
+export function withDefaults(key: StrategyKey, saved?: Params): Params {
+  return { ...(findStrategy(key)?.defaults ?? {}), ...(saved ?? {}) };
 }

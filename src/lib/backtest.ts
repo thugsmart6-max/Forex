@@ -1,7 +1,7 @@
 /** Bar-by-bar backtester - a port of backtest.py. Uses the same Engine as the paper trader. */
 import { atr } from "./indicators";
 import { Engine, type EngineConfig, type LogEntry, type Trade } from "./engine";
-import { STRATEGIES, describe, type Params, type StrategyKey } from "./strategies";
+import { describe, type Params, type StrategyDef } from "./strategies";
 import { align, type DataSet } from "./types";
 
 export interface Stats {
@@ -26,7 +26,7 @@ export interface Stats {
 }
 
 export interface BacktestResult {
-  strategy: StrategyKey;
+  strategy: string;
   name: string;
   description: string;
   keys: string[];
@@ -98,6 +98,46 @@ export function computeStats(equity: [number, number][], trades: Trade[]): Stats
   return s;
 }
 
+export interface MonthStat {
+  month: string; // "2025-06" (UTC)
+  trades: number;
+  wins: number;
+  winRate: number; // NaN when no trades closed that month
+  startEquity: number;
+  endEquity: number;
+  pnl: number;
+  ret: number; // return on the equity at the start of the month
+}
+
+/** Month-by-month results: trades are counted in the month they closed, returns come from the equity curve. */
+export function monthlyStats(equity: [number, number][], trades: Trade[], initial: number): MonthStat[] {
+  const key = (t: number) => new Date(t * 1000).toISOString().slice(0, 7);
+  const months = new Map<string, MonthStat>();
+  let prevEnd = initial;
+  for (const [t, v] of equity) {
+    const k = key(t);
+    let m = months.get(k);
+    if (!m) {
+      m = { month: k, trades: 0, wins: 0, winRate: NaN, startEquity: prevEnd, endEquity: v, pnl: 0, ret: 0 };
+      months.set(k, m);
+    }
+    m.endEquity = v;
+    prevEnd = v;
+  }
+  for (const tr of trades) {
+    const m = months.get(key(tr.exitTime));
+    if (!m) continue;
+    m.trades++;
+    if (tr.pnl > 0) m.wins++;
+  }
+  for (const m of months.values()) {
+    m.pnl = m.endEquity - m.startEquity;
+    m.ret = m.endEquity / m.startEquity - 1;
+    m.winRate = m.trades ? m.wins / m.trades : NaN;
+  }
+  return [...months.values()];
+}
+
 /** Fall from the running peak after every bar (0 = at a new high, -0.1 = 10% below it). */
 export function drawdownCurve(equity: [number, number][]): [number, number][] {
   let peak = -Infinity;
@@ -108,20 +148,19 @@ export function drawdownCurve(equity: [number, number][]): [number, number][] {
 }
 
 export function runBacktest(
-  strategy: StrategyKey,
+  def: StrategyDef,
   params: Params,
   raw: DataSet,
   keys: string[],
   cfg: EngineConfig,
   atrN = 14,
 ): BacktestResult {
-  const def = STRATEGIES[strategy];
   const data = align(Object.fromEntries(keys.map((k) => [k, raw[k]])));
   const n = data[keys[0]].t.length;
   if (n < 50) throw new Error(`Only ${n} overlapping bars - need more data (try a longer period).`);
   const signals = def.generate(data, keys, params);
   const atrs = Object.fromEntries(keys.map((k) => [k, atr(data[k], atrN)]));
-  const eng = new Engine(keys, cfg, def.sizing);
+  const eng = new Engine(keys, cfg, def.sizing, def.exits?.(params));
 
   const idx = data[keys[0]].t;
   for (let i = 0; i < n; i++) {
@@ -138,7 +177,7 @@ export function runBacktest(
   eng.closeAll(idx[n - 1], Object.fromEntries(keys.map((k) => [k, data[k].c[n - 1]])));
 
   return {
-    strategy,
+    strategy: def.key,
     name: def.name,
     description: describe(def, params),
     keys,

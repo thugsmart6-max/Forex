@@ -41,6 +41,19 @@ export interface Position {
   stop: number | null;
   riskAmount: number | null;
   entryCommission: number;
+  target?: number | null; // take-profit price (strategies with exit rules only)
+  bars?: number; // bars held, for the time exit
+}
+
+/**
+ * Optional per-strategy exits. Unset fields fall back to the EngineConfig, so the
+ * original four strategies behave exactly as in the Python framework.
+ */
+export interface ExitRules {
+  stopAtrMult?: number; // initial stop distance in ATRs
+  trailing?: boolean; // trail the stop with the close
+  targetAtrMult?: number; // take profit this many ATRs from entry
+  maxBars?: number; // close at the bar's close after holding this many bars
 }
 
 export interface Trade {
@@ -94,7 +107,7 @@ export class Engine {
   positions: Record<string, Position> = {};
   pending: Record<string, number> = {};
   pendingAtr: Record<string, number | null> = {};
-  blocked: Record<string, number> = {}; // direction stopped out; no re-entry until signal changes
+  blocked: Record<string, number> = {}; // direction stopped out (or target/time exit); no re-entry until signal changes
   day: number | null = null;
   dayStartEquity: number;
   halted = false;
@@ -105,14 +118,17 @@ export class Engine {
   /** cap on stored log lines (paper trading can run for a long time) */
   maxLog = Infinity;
 
-  constructor(keys: string[], cfg: EngineConfig, sizing: "atr" | "notional", specOverrides?: Record<string, Partial<Spec>>) {
+  exits: ExitRules;
+
+  constructor(keys: string[], cfg: EngineConfig, sizing: "atr" | "notional", exits: ExitRules = {}) {
     this.specs = {};
     for (const k of keys) {
-      const base = BY_ID[k]?.spec;
-      if (!base) throw new Error(`${k} has no contract spec - it cannot be traded`);
-      this.specs[k] = { ...base, ...(specOverrides?.[k] ?? {}) };
+      const spec = BY_ID[k]?.spec;
+      if (!spec) throw new Error(`${k} has no contract spec - it cannot be traded`);
+      this.specs[k] = spec;
     }
     this.cfg = cfg;
+    this.exits = exits;
     this.sizing = sizing;
     this.cash = cfg.initialEquity;
     this.dayStartEquity = cfg.initialEquity;
@@ -159,7 +175,7 @@ export class Engine {
     let lots: number;
     if (this.sizing === "atr") {
       if (atrVal == null || !(atrVal > 0)) return;
-      stopDist = this.cfg.stopAtrMult * atrVal;
+      stopDist = (this.exits.stopAtrMult ?? this.cfg.stopAtrMult) * atrVal;
       lots = (equity * this.cfg.riskPerTrade) / (stopDist * usdPerUnitLot);
       const cap = (equity * this.cfg.maxLeverage) / (px * usdPerUnitLot);
       lots = Math.min(lots, cap);
@@ -177,9 +193,10 @@ export class Engine {
     this.cash -= comm;
     const stop = stopDist ? fill - direction * stopDist : null;
     const riskAmt = stopDist ? lots * stopDist * usdPerUnitLot : null;
-    this.positions[k] = { direction, lots, entry: fill, entryTime: t, stop, riskAmount: riskAmt, entryCommission: comm };
+    const target = this.exits.targetAtrMult && atrVal ? fill + direction * this.exits.targetAtrMult * atrVal : null;
+    this.positions[k] = { direction, lots, entry: fill, entryTime: t, stop, riskAmount: riskAmt, entryCommission: comm, target, bars: 0 };
     this.emit(t, "open", `OPEN ${direction > 0 ? "LONG" : "SHORT"} ${lots} ${name} @ ${fill.toPrecision(6)}` +
-      (stop != null ? `  stop ${stop.toPrecision(6)}` : ""));
+      (stop != null ? `  stop ${stop.toPrecision(6)}` : "") + (target != null ? `  target ${target.toPrecision(6)}` : ""));
   }
 
   private close(k: string, px: number, t: number, reason: string) {
@@ -248,12 +265,33 @@ export class Engine {
       }
     }
 
+    // 3b. take-profit target (if the stop was also touched this bar, the stop above wins - conservative)
+    //     and time exit; neither re-enters in the same direction until the signal changes
+    for (const [k, p] of Object.entries(this.positions)) {
+      if (!(k in bars)) continue;
+      const b = bars[k];
+      if (p.target != null && p.direction === 1 && b.High >= p.target) {
+        this.close(k, Math.max(b.Open, p.target), t, "target");
+        this.blocked[k] = 1;
+      } else if (p.target != null && p.direction === -1 && b.Low <= p.target) {
+        this.close(k, Math.min(b.Open, p.target), t, "target");
+        this.blocked[k] = -1;
+      } else if (this.exits.maxBars) {
+        p.bars = (p.bars ?? 0) + 1;
+        if (p.bars >= this.exits.maxBars) {
+          this.close(k, b.Close, t, "time");
+          this.blocked[k] = p.direction;
+        }
+      }
+    }
+
     // 4. trail stops
-    if (this.cfg.trailing) {
+    if (this.exits.trailing ?? this.cfg.trailing) {
+      const mult = this.exits.stopAtrMult ?? this.cfg.stopAtrMult;
       for (const [k, p] of Object.entries(this.positions)) {
         const a = atrs[k];
         if (p.stop == null || a == null || !(a > 0)) continue;
-        const nw = closes[k] - p.direction * this.cfg.stopAtrMult * a;
+        const nw = closes[k] - p.direction * mult * a;
         p.stop = p.direction === 1 ? Math.max(p.stop, nw) : Math.min(p.stop, nw);
       }
     }

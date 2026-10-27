@@ -6,22 +6,23 @@ import type { OHLC, Quote } from "./types";
 /** useState persisted in localStorage (per browser). Falls back silently when storage is unavailable. */
 export function useLocalStorage<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(initial);
-  const loaded = useRef(false);
+  const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     try {
       const raw = localStorage.getItem(key);
       // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate from storage after mount
       if (raw != null) setValue(JSON.parse(raw));
     } catch {}
-    loaded.current = true;
+    setLoaded(true);
   }, [key]);
   useEffect(() => {
-    if (!loaded.current) return;
+    if (!loaded) return;
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch {}
-  }, [key, value]);
-  return [value, setValue] as const;
+  }, [key, value, loaded]);
+  /** loaded = the stored value has been read (false during the first render) */
+  return [value, setValue, loaded] as const;
 }
 
 export function useNow(intervalMs = 1000) {

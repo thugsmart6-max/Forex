@@ -131,3 +131,13 @@ export function bollinger(s: number[], n = 20, k = 2) {
     lo: mid.map((m, i) => m - k * sd[i]),
   };
 }
+
+/** Stochastic oscillator: %K (smoothed over `smooth` bars) and its %D signal line. */
+export function stochastic(d: OHLC, n = 14, smooth = 3, signal = 3) {
+  const hh = rollingMax(d.h, n);
+  const ll = rollingMin(d.l, n);
+  const raw = d.c.map((c, i) => (hh[i] - ll[i] === 0 ? 50 : (100 * (c - ll[i])) / (hh[i] - ll[i])));
+  const k = sma(raw.map((v) => (Number.isNaN(v) ? 0 : v)), smooth).map((v, i) => (Number.isNaN(raw[i]) ? NaN : v));
+  const dl = sma(k.map((v) => (Number.isNaN(v) ? 0 : v)), signal).map((v, i) => (i < n + smooth + signal - 3 ? NaN : v));
+  return { k: k.map((v, i) => (i < n + smooth - 2 ? NaN : v)), d: dl };
+}

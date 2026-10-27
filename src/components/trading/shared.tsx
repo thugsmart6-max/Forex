@@ -1,25 +1,71 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { EngineConfig, Trade } from "@/lib/engine";
 import { BY_ID, TRADABLE, fmtPrice } from "@/lib/instruments";
 import type { Stats } from "@/lib/backtest";
-import { STRATEGY_LIST, type Params, type StrategyDef, type StrategyKey } from "@/lib/strategies";
+import { CLASSIC, HIGH_WIN_LIST, type Params, type StrategyDef, type StrategyKey } from "@/lib/strategies";
 import { dateTime, num, pct, usd } from "@/lib/format";
 import { Field, Stat, cx, inputCls } from "../ui";
 
-export function StrategyPicker({ value, onChange, allowAll }: {
-  value: StrategyKey | "all";
-  onChange: (v: StrategyKey | "all") => void;
+/** A single strategy, or one of the two compare-everything modes. */
+export type StrategyPick = StrategyKey | "all" | "allhw";
+
+/** Strategies run by a pick: the compare modes expand to their whole group. */
+export function pickKeys(pick: StrategyPick): StrategyKey[] {
+  if (pick === "all") return CLASSIC.map((s) => s.key);
+  if (pick === "allhw") return HIGH_WIN_LIST.map((s) => s.key);
+  return [pick];
+}
+
+export function StrategyPicker({ value, onChange, allowAll, custom = [] }: {
+  value: StrategyPick;
+  onChange: (v: StrategyPick) => void;
   allowAll?: boolean;
+  /** the user's Strategy Builder strategies */
+  custom?: StrategyDef[];
 }) {
-  const opts: { key: StrategyKey | "all"; name: string; short: string }[] = [
-    ...STRATEGY_LIST.map((s) => ({ key: s.key, name: s.name, short: s.short })),
-    ...(allowAll ? [{ key: "all" as const, name: "Compare all 4", short: "Run every strategy and rank them side by side." }] : []),
+  type Opt = { key: StrategyPick; name: string; short: string; tag?: string };
+  const groups: { title: string; note: string; opts: Opt[]; mine?: boolean }[] = [
+    {
+      title: "My strategies",
+      note: "Built by you in the Strategy Builder.",
+      mine: true,
+      opts: custom.map((s) => ({ key: s.key, name: s.name, short: s.short, tag: "MINE" })),
+    },
+    {
+      title: "High win-rate (new)",
+      note: "Small take-profit, wider stop: wins often, but each loss costs about 3 wins.",
+      opts: [
+        ...HIGH_WIN_LIST.map((s) => ({ key: s.key, name: s.name, short: s.short, tag: "60–75% wins" })),
+        ...(allowAll ? [{ key: "allhw" as const, name: "Compare high-win 5", short: "Run all five new strategies and rank them side by side." }] : []),
+      ],
+    },
+    {
+      title: "Classic (from the strategy guide)",
+      note: "Let winners run with trailing stops: fewer, bigger wins.",
+      opts: [
+        ...CLASSIC.map((s) => ({ key: s.key, name: s.name, short: s.short })),
+        ...(allowAll ? [{ key: "all" as const, name: "Compare classic 4", short: "Run the four classic strategies and rank them side by side." }] : []),
+      ],
+    },
   ];
   return (
-    <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Strategy">
-      {opts.map((o) => (
+    <div className="space-y-4" role="radiogroup" aria-label="Strategy">
+      {groups.map((g) => (
+        <div key={g.title}>
+          <div className="mb-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-2">{g.title}</div>
+            <div className="text-[11px] text-ink-3">{g.note}</div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+      {g.mine && (
+        <Link href="/builder" className="grid place-items-center rounded-lg border border-dashed border-accent/60 p-3 text-center text-sm font-semibold text-accent hover:bg-accent/10">
+          <span>＋ {custom.length ? "Create another" : "Create your own strategy"}<span className="mt-1 block text-xs font-normal text-ink-3">No coding — pick indicators and rules</span></span>
+        </Link>
+      )}
+      {g.opts.map((o) => (
         <button
           key={o.key}
           role="radio"
@@ -31,13 +77,17 @@ export function StrategyPicker({ value, onChange, allowAll }: {
           )}
         >
           <div className="flex items-center gap-2 text-sm font-semibold">
-            <span className={cx("grid h-4 w-4 place-items-center rounded-full border", value === o.key ? "border-accent" : "border-ink-3")}>
+            <span className={cx("grid h-4 w-4 shrink-0 place-items-center rounded-full border", value === o.key ? "border-accent" : "border-ink-3")}>
               {value === o.key && <span className="h-2 w-2 rounded-full bg-accent" />}
             </span>
             {o.name}
           </div>
+          {o.tag && <span className={cx("mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold", o.tag === "MINE" ? "bg-accent/15 text-accent" : "bg-up/15 text-up")}>{o.tag}</span>}
           <p className="mt-1 text-xs leading-snug text-ink-3">{o.short}</p>
         </button>
+      ))}
+          </div>
+        </div>
       ))}
     </div>
   );
@@ -97,6 +147,14 @@ export function InstrumentSelect({ value, onChange, label }: { value: string; on
 }
 
 export function ParamsEditor({ def, params, onChange }: { def: StrategyDef; params: Params; onChange: (p: Params) => void }) {
+  if (def.group === "custom") {
+    return (
+      <p className="text-xs text-ink-3">
+        Rules, take-profit and stop for <b className="text-ink-2">{def.name}</b> are edited in the{" "}
+        <Link href={`/builder?id=${def.key.slice(7)}`} className="font-medium text-accent hover:underline">Strategy Builder →</Link>
+      </p>
+    );
+  }
   return (
     <div className="grid grid-cols-2 gap-3">
       {def.params.map((p) =>
@@ -230,6 +288,12 @@ export function TradesTable({ trades, pageSize = 20 }: { trades: Trade[]; pageSi
       )}
     </div>
   );
+}
+
+/** Read a query-string value once (avoids useSearchParams + Suspense for one-off presets). */
+export function readParam(name: string): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get(name);
 }
 
 /** Read ?symbol=XXX once on mount (avoids useSearchParams + Suspense for a one-off preset). */
